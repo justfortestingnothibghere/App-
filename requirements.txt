@@ -3,4 +3,5 @@ Flask
 requests
 beautifulsoup4
 asgiref
+selenium
 uvicorn
