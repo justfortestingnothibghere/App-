@@ -7,6 +7,7 @@ import requests
 from bs4 import BeautifulSoup
 from flask import Flask, request, jsonify
 from asgiref.wsgi import WsgiToAsgi
+from urllib.parse import urljoin
 
 logging.basicConfig(level=logging.INFO)
 app = Flask(__name__)
@@ -25,7 +26,7 @@ def create_account():
         session.headers.update({
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         })
-        response = session.get('https://platform.cloudways.com/signup', timeout=10)
+        response = session.get('https://platform.cloudways.com/signup', timeout=15)
         response.raise_for_status()
         soup = BeautifulSoup(response.text, 'html.parser')
         form = soup.find('form')
@@ -34,41 +35,47 @@ def create_account():
 
         action = form.get('action', '')
         if not action.startswith('http'):
-            from urllib.parse import urljoin
             action = urljoin(response.url, action)
         method = form.get('method', 'post').lower()
 
         data = {}
-        user_details = {"email": email}
+        user_details = {"email": email, "first_name": "Test", "last_name": "User"}
         for inp in form.find_all('input'):
             name = inp.get('name')
             if not name:
                 continue
             if inp.get('type') == 'hidden':
                 data[name] = inp.get('value', '')
+            elif 'first' in name.lower() or 'fname' in name.lower():
+                data[name] = 'Test'
+            elif 'last' in name.lower() or 'lname' in name.lower():
+                data[name] = 'User'
             elif 'email' in name.lower() or inp.get('type') == 'email':
                 data[name] = email
+            elif inp.get('type') == 'password' and 'confirm' not in name.lower():
+                generated_password = generate_random_string()
+                data[name] = generated_password
+                user_details["password"] = generated_password
+            elif 'confirm_password' in name.lower():
+                data[name] = user_details["password"]  # Match the generated password
 
-        # Fill name if present
-        name_input = form.find('input', attrs={'name': lambda x: x and 'name' in x.lower()})
-        if name_input and name_input.get('name'):
-            data[name_input.get('name')] = 'Test User'
-            user_details["name"] = 'Test User'
+        # Handle dropdown selects
+        # "I would best describe myself as" - default to "Developer"
+        describe_select = form.find('select', attrs={'name': lambda x: x and 'describe' in x.lower() or 'user_type' in x.lower()})
+        if describe_select and describe_select.get('name'):
+            data[describe_select.get('name')] = 'Developer'
 
-        # Fill password if present
-        pwd_input = form.find('input', attrs={'type': 'password'})
-        if pwd_input and pwd_input.get('name'):
-            generated_password = generate_random_string()
-            data[pwd_input.get('name')] = generated_password
-            user_details["password"] = generated_password
+        # "My monthly hosting spending is" - default to "Less than $50"
+        spend_select = form.find('select', attrs={'name': lambda x: x and 'spend' in x.lower() or 'hosting' in x.lower()})
+        if spend_select and spend_select.get('name'):
+            data[spend_select.get('name')] = 'Less than $50'
 
         if method == 'post':
-            submit_response = session.post(action, data=data, timeout=10)
+            submit_response = session.post(action, data=data, timeout=15)
         else:
-            submit_response = session.get(action, params=data, timeout=10)
+            submit_response = session.get(action, params=data, timeout=15)
         submit_response.raise_for_status()
 
-        # Check for success indicators
         text_lower = submit_response.text.lower()
         success_indicators = [
             "activation email sent",
@@ -87,15 +94,17 @@ def create_account():
                 "user_details": user_details
             })
         else:
-            logging.warning(f"Signup attempt failed for {email}: {submit_response.text[:200]}...")
-            return jsonify({"status": "failed", "message": "Signup failed or form submission issue."})
+            logging.warning(f"Signup attempt failed for {email}. Response snippet: {submit_response.text[:300]}...")
+            return jsonify({"status": "failed", "message": f"Signup failed (possible validation error). Check logs. Response status: {submit_response.status_code}"})
 
     except requests.exceptions.RequestException as e:
+        error_message = f"Network error during signup: {str(e)}"
         logging.error(f"Request error for {email}: {str(e)}")
-        return jsonify({"status": "failed", "message": "Network error during signup."}), 500
+        return jsonify({"status": "failed", "message": error_message}), 500
     except Exception as e:
+        error_message = f"Unexpected error: {str(e)}"
         logging.error(f"Unexpected error for {email}: {str(e)}")
-        return jsonify({"status": "failed", "message": "Unexpected error."}), 500
+        return jsonify({"status": "failed", "message": error_message}), 500
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8000))
